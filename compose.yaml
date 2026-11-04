@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: earnscore-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: earnscore
+      POSTGRES_USER: earnscore_owner
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?Copy .env.example to .env and set POSTGRES_OWNER_PASSWORD}
+      EARNSCORE_APP_PASSWORD: ${EARNSCORE_APP_PASSWORD:?Set EARNSCORE_APP_PASSWORD}
+      EARNSCORE_PROCESSOR_PASSWORD: ${EARNSCORE_PROCESSOR_PASSWORD:?Set EARNSCORE_PROCESSOR_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U earnscore_owner -d earnscore"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+volumes:
+  pgdata:

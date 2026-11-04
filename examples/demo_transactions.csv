@@ -1,0 +1,9 @@
+transaction_id,date,description,amount,currency,source,category
+DEMO-001,2026-09-01,Platform A payout,1200.00,INR,Bank,self_reported_income
+DEMO-002,2026-09-02,Fuel expense,-350.00,INR,Bank,transport_expense
+DEMO-003,2026-09-03,Platform B payout,950.00,INR,Bank,self_reported_income
+DEMO-004,2026-09-04,Transfer from own account,5000.00,INR,Bank,self_transfer
+DEMO-005,2026-09-05,Existing loan EMI,-2500.00,INR,Bank,loan_repayment
+DEMO-006,2026-09-06,Platform A payout,1600.00,INR,Bank,self_reported_income
+DEMO-007,2026-09-06,Platform A payout reference,1600.00,INR,Platform A,duplicate_platform_record
+DEMO-008,2026-09-07,Groceries,-825.00,INR,Bank,living_expense

@@ -1,0 +1,2 @@
+import { AssessmentLab } from "@/components/assessment-lab";
+export default function Page(){return <><div className="eyebrow">WORKER / ASSESSMENT LAB</div><div className="page-heading"><div><h1>Understand your financial patterns</h1><p>Explore sample scenarios before real statement uploads and verified assessments are implemented.</p></div><span className="phase-badge">Interactive demo · not your credit file</span></div><AssessmentLab compact/></>}
