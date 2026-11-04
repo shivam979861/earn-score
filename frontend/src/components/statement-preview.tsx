@@ -1,33 +1,160 @@
 "use client";
+
 import { useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icon";
-import { previewStatement, type StatementPreview } from "@/lib/statement-preview";
+import {
+  inspectStatement, isMappingValid, MAX_CSV_BYTES, previewStatement,
+  type ColumnKey, type ColumnMapping, type StatementPreview,
+} from "@/lib/statement-preview";
 
-const money=(n:number)=>new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(n);
-export function StatementPreviewTool(){
-  const fileRef=useRef<HTMLInputElement>(null);
-  const [result,setResult]=useState<StatementPreview|null>(null);
-  const [filename,setFilename]=useState("");
-  const [error,setError]=useState("");
-  const [loading,setLoading]=useState(false);
-  const [filter,setFilter]=useState<"all"|"flagged"|"income">("all");
-  const visible=useMemo(()=>result?.rows.filter(r=>filter==="all"||(filter==="flagged"?r.needsReview:r.amount>0 && !r.needsReview && ["income","earning","payout","salary","revenue"].some(x=>r.category.includes(x))))??[],[result,filter]);
-  function useText(text:string,name:string){ try{const data=previewStatement(text);setResult(data);setFilename(name);setError("");setFilter("all");}catch(e){setResult(null);setError(e instanceof Error?e.message:"Unable to read this file.");}}
-  async function onFile(file?:File){if(!file)return; if(file.size>2*1024*1024){setError("Choose a CSV smaller than 2 MB.");setResult(null);return;} if(!file.name.toLowerCase().endsWith(".csv")){setError("Choose a .csv file.");setResult(null);return;}setLoading(true);try{useText(await file.text(),file.name);}catch{setError("Could not read the selected file.");}finally{setLoading(false);}}
-  async function sample(){setLoading(true);setError("");try{const response=await fetch("/examples/demo_transactions.csv",{cache:"no-store"});if(!response.ok)throw new Error("Sample file unavailable");useText(await response.text(),"demo_transactions.csv");}catch(e){setError(e instanceof Error?e.message:"Sample unavailable.");}finally{setLoading(false);}}
-  function reset(){setResult(null);setFilename("");setError("");setFilter("all");if(fileRef.current)fileRef.current.value="";}
+const money = (n: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(n);
+const fields: { key: ColumnKey; label: string; hint: string }[] = [
+  { key: "date", label: "Transaction date *", hint: "YYYY-MM-DD or DD/MM/YYYY" },
+  { key: "description", label: "Description *", hint: "Payment narration or details" },
+  { key: "amount", label: "Signed amount", hint: "Choose this OR credit + debit" },
+  { key: "credit", label: "Credit", hint: "Money received (positive amounts)" },
+  { key: "debit", label: "Debit", hint: "Money paid (positive amounts)" },
+  { key: "category", label: "Category", hint: "Optional: helps identify earnings" },
+  { key: "source", label: "Source", hint: "Optional: platform / bank account" },
+  { key: "transactionId", label: "Reference ID", hint: "Optional: helps identify repeated records" },
+];
+const formatDate = (s: string) => new Date(`${s}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+type KindFilter = "all" | "income" | "expense" | "transfer" | "review";
+
+function exportReview(result: StatementPreview) {
+  const esc = (value: string | number) => {
+    const raw = String(value);
+    const safe = /^[=+@-]/.test(raw) && typeof value === "string" ? `'${raw}` : raw;
+    return `"${safe.replace(/"/g, '""')}"`;
+  };
+  const header = ["line", "date", "description", "source", "amount", "status", "reason"];
+  const rows = result.rows.filter(r => r.needsReview).map(r => [r.line, r.date, r.description, r.source, r.amount, "Requires review", r.issues.join("; ")]);
+  const skipped = result.skippedReasons.map(r => [r.line, "", "", "", "", "Skipped", r.reason]);
+  const csv = [header, ...rows, ...skipped].map(r => r.map(esc).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url; link.download = "earnscore-review-items.csv";
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export function StatementPreviewTool() {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [filename, setFilename] = useState("");
+  const [raw, setRaw] = useState("");
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [rowCount, setRowCount] = useState(0);
+  const [mapping, setMapping] = useState<ColumnMapping | null>(null);
+  const [showMapping, setShowMapping] = useState(false);
+  const [result, setResult] = useState<StatementPreview | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [filter, setFilter] = useState<KindFilter>("all");
+  const [source, setSource] = useState("all");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [sort, setSort] = useState<"newest" | "oldest">("newest");
+  const resetFilters = () => { setFilter("all"); setSource("all"); setSearch(""); setPage(0); setSort("newest"); };
+
+  function applyPreview(csv: string, columns: ColumnMapping) {
+    try {
+      const parsed = previewStatement(csv, columns);
+      setResult(parsed); setShowMapping(false); setError(""); resetFilters();
+    } catch (e) {
+      setResult(null); setError(e instanceof Error ? e.message : "Could not parse this statement."); setShowMapping(true);
+    }
+  }
+  function openCSV(text: string, name: string) {
+    try {
+      const inspected = inspectStatement(text);
+      setRaw(text); setFilename(name); setHeaders(inspected.headers);
+      setRowCount(inspected.rowCount); setMapping(inspected.mapping);
+      setResult(null); setError(""); resetFilters();
+      if (isMappingValid(inspected.mapping)) applyPreview(text, inspected.mapping);
+      else { setShowMapping(true); setError("We couldn't identify all required columns. Match them below to continue."); }
+    } catch (e) {
+      setResult(null); setRaw(""); setFilename(""); setMapping(null); setHeaders([]);
+      setError(e instanceof Error ? e.message : "Could not read this file.");
+    }
+  }
+  async function readFile(file?: File) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".csv")) { setError("Choose a CSV file ending in .csv."); setResult(null); return; }
+    if (file.size > MAX_CSV_BYTES) { setError("This file is too large. Choose a CSV smaller than 2 MB."); setResult(null); return; }
+    if (!file.size) { setError("This CSV file is empty."); setResult(null); return; }
+    setLoading(true); setError("");
+    try { openCSV(await file.text(), file.name); }
+    catch { setError("We couldn't open the selected CSV file."); setResult(null); }
+    finally { setLoading(false); }
+  }
+  async function useSample() {
+    setLoading(true); setError("");
+    try {
+      const response = await fetch("/examples/demo_transactions.csv", { cache: "no-store" });
+      if (!response.ok) throw new Error("Sample CSV is unavailable.");
+      openCSV(await response.text(), "demo_transactions.csv");
+    } catch (e) { setError(e instanceof Error ? e.message : "Sample is unavailable."); }
+    finally { setLoading(false); }
+  }
+  function reset() {
+    setRaw(""); setFilename(""); setHeaders([]); setRowCount(0); setMapping(null);
+    setShowMapping(false); setResult(null); setError(""); resetFilters();
+    if (fileRef.current) fileRef.current.value = "";
+  }
+  const sources = useMemo(() => [...new Set(result?.rows.map(r => r.source) || [])].sort(), [result]);
+  const visible = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return (result?.rows || []).filter(r =>
+      (filter === "all" || (filter === "review" ? r.needsReview : r.kind === filter)) &&
+      (source === "all" || r.source === source) &&
+      (!term || [r.date, r.description, r.source, r.category, r.transactionId].some(x => x.toLowerCase().includes(term)))
+    ).sort((a, b) => (sort === "newest" ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date)) || a.line - b.line);
+  }, [result, filter, source, search, sort]);
+  const totalPages = Math.ceil(visible.length / 25);
+  const safePage = Math.min(page, Math.max(0, totalPages - 1));
+  const pageRows = visible.slice(safePage * 25, (safePage + 1) * 25);
+  const setKind = (v: KindFilter) => { setFilter(v); setPage(0); };
+
   return <div className="statement-tool">
-    <div className="new-page-heading"><span className="ui-kicker">WORKER · FINANCIAL DATA</span><h1>Preview your income records</h1><p>Choose a CSV to check its structure and spot records needing review. Nothing is sent to our backend or saved by this tool.</p></div>
-    <section className="privacy-strip"><Icon name="shield-check" size={20}/><div><strong>Private browser preview</strong><span>CSV parsing happens in this page only. Closing or refreshing the page clears the preview. This is not bank verification.</span></div></section>
+    <div className="new-page-heading"><span className="ui-kicker">WORKER WORKSPACE · INCOME RECORDS</span><h1>Upload and preview a statement</h1><p>Review transactions before using them for any future EarnScore assessment. You can try the whole experience with fictional sample data.</p></div>
+    <section className="privacy-strip" role="note"><Icon name="shield-check" size={20}/><div><strong>Private, browser-only preview</strong><span>Your CSV is read locally in this browser tab. It is not uploaded, stored in PostgreSQL, verified by a bank, or shared with lenders. Refreshing clears it.</span></div></section>
+    <div className="csv-workflow-steps"><span className="csv-step active"><b>1</b> Choose CSV</span><span className={`csv-step ${raw ? "active" : ""}`}><b>2</b> Match columns</span><span className={`csv-step ${result ? "active" : ""}`}><b>3</b> Review transactions</span></div>
     <div className="statement-grid">
-      <section className="card statement-upload-card"><div className="statement-upload-symbol"><Icon name="cloud-upload" size={30}/></div><h2>Choose a statement</h2><p>Supports CSV with date, description, and amount columns. Maximum 2 MB and 10,000 transactions.</p><input ref={fileRef} className="statement-file-input" id="statement-file" type="file" accept=".csv,text/csv" aria-label="Select a financial statement CSV" onChange={e=>void onFile(e.target.files?.[0])}/><label htmlFor="statement-file" className="btn btn-primary"><Icon name="cloud-upload" size={18}/> {loading?"Reading file…":"Choose CSV file"}</label><button className="btn btn-outline" disabled={loading} onClick={()=>void sample()}><Icon name="file-text" size={18}/> Use sample data</button><a className="sample-download" href="/examples/demo_transactions.csv" download>Download sample CSV <Icon name="arrow-down-right" size={14}/></a></section>
-      <section className="card statement-steps"><span className="ui-kicker">HOW THIS WORKS</span><h2>A simple first check</h2><div className="simple-guidance"><span>1</span><div><strong>Select or try a sample</strong><p>Start with fictional sample data if you don't want to use your own records.</p></div></div><div className="simple-guidance"><span>2</span><div><strong>Review the results</strong><p>See possible income, expenses, and items requiring closer review.</p></div></div><div className="simple-guidance"><span>3</span><div><strong>Correct your source file</strong><p>Real ingestion, reconciliation, and saved assessments are not connected yet.</p></div></div></section>
+      <section className="card statement-upload-card">
+        <div className={`csv-dropzone ${dragging ? "is-dragging" : ""}`} onDragEnter={e => { e.preventDefault(); setDragging(true); }} onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={e => { e.preventDefault(); if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }} onDrop={e => { e.preventDefault(); setDragging(false); void readFile(e.dataTransfer.files[0]); }}>
+          <div className="statement-upload-symbol"><Icon name="cloud-upload" size={27}/></div>
+          <h2>{loading ? "Reading your statement…" : "Drag your CSV here"}</h2>
+          <p>Or choose a file from your device. Bank statement exports, platform payouts, or a simple transaction sheet all work with column matching.</p>
+          <input ref={fileRef} className="statement-file-input" id="statement-file" type="file" accept=".csv,text/csv" aria-label="Choose a financial CSV file" onChange={e => void readFile(e.target.files?.[0])} />
+          <label htmlFor="statement-file" className="btn btn-primary"><Icon name="cloud-upload" size={17}/> {loading ? "Reading…" : filename ? "Replace CSV" : "Choose CSV file"}</label>
+          <span className="csv-file-hint">CSV only · Up to 2 MB · 10,000 rows</span>
+        </div>
+        {filename && <div className="csv-selected-file"><Icon name="file-text" size={19}/><div><strong>{filename}</strong><span>{rowCount.toLocaleString("en-IN")} transaction rows found</span></div><button type="button" className="csv-text-button" onClick={reset} aria-label="Clear selected statement">Clear</button></div>}
+      </section>
+      <section className="card statement-steps"><span className="ui-kicker">NEW HERE?</span><h2>Try the sample first</h2><p className="csv-aside-copy">See how earnings, transfers, possible duplicates, and expenses appear before choosing a personal file.</p>
+        <button className="btn btn-outline csv-demo-button" type="button" disabled={loading} onClick={() => void useSample()}><Icon name="file-text" size={18}/> Load sample transactions</button>
+        <a className="sample-download" href="/examples/demo_transactions.csv" download>Download example CSV <Icon name="arrow-down-right" size={14}/></a>
+        <div className="csv-supported"><strong>Supported column layouts</strong><span><Icon name="check" size={15}/> Date + description + signed amount</span><span><Icon name="check" size={15}/> Date + narration + credit + debit</span><span><Icon name="check" size={15}/> Optional source, category, and reference ID</span></div>
+      </section>
     </div>
     {error && <div className="form-error statement-feedback" role="alert"><Icon name="circle-alert" size={18}/>{error}</div>}
-    {result && <section className="statement-result" aria-live="polite"><div className="statement-result-title"><div><span className="ui-kicker">LOCAL CSV PREVIEW</span><h2>{filename}</h2><p>{result.rows.length} valid rows · {result.skipped} skipped · all values self-reported</p></div><button className="btn btn-outline" onClick={reset}>Clear preview</button></div>
-      <div className="statement-metrics"><div className="statement-metric"><span>Possible earnings</span><strong>{money(result.income)}</strong><small>Excludes flagged and unknown credits</small></div><div className="statement-metric"><span>Recorded outflows</span><strong>{money(result.outflows)}</strong><small>Based on negative amounts</small></div><div className="statement-metric"><span>Needs review</span><strong>{result.flagged}</strong><small>Potential duplicates, transfers, unknowns</small></div></div>
-      <div className="card statement-table-card"><div className="statement-table-top"><div><h3>Transaction preview</h3><p>Same-day matching amounts across different sources are flagged, not automatically deduplicated.</p></div><label>Show<select value={filter} onChange={e=>setFilter(e.target.value as typeof filter)}><option value="all">All records</option><option value="income">Possible income</option><option value="flagged">Needs review</option></select></label></div><div className="statement-scroll"><table className="statement-table"><thead><tr><th>Date</th><th>Description</th><th>Source</th><th>Amount</th><th>Status</th></tr></thead><tbody>{visible.slice(0,100).map(row=><tr key={row.id}><td>{row.date}</td><td>{row.description}</td><td>{row.source}</td><td className={row.amount>=0?"money-positive":"money-negative"}>{row.amount>=0?"+":"−"}{money(Math.abs(row.amount))}</td><td><span className={row.needsReview?"data-tag review":"data-tag"}>{row.potentialDuplicate?"Possible duplicate":row.needsReview?"Review":"Unverified"}</span></td></tr>)}</tbody></table>{visible.length===0 && <p className="empty-note">No records match this filter.</p>}</div>{visible.length>100&&<p className="table-foot">Showing the first 100 of {visible.length} rows.</p>}</div>
-      <div className="roadmap-note"><Icon name="info" size={19}/><div><strong>No score has been generated.</strong><p>These are basic client-side hints, not verified earnings or a credit assessment. The backend ingestion, reconciliation, and lender sharing features will be implemented separately.</p></div></div>
+    {raw && mapping && <section className="card csv-mapping-card">
+      <div className="csv-section-heading"><div><span className="ui-kicker">STEP 2 · COLUMN MATCHING</span><h2>Match your CSV columns</h2><p>We selected common bank headings automatically. Adjust them if your file uses different labels.</p></div><button type="button" className="btn btn-outline" aria-expanded={showMapping} aria-controls="csv-mapping-controls" onClick={() => setShowMapping(!showMapping)}>{showMapping ? "Hide column settings" : "Edit column mapping"}</button></div>
+      {showMapping && <div id="csv-mapping-controls"><div className="csv-column-grid">{fields.map(field => <label key={field.key} className="csv-field-map"><strong>{field.label}</strong><span>{field.hint}</span><select aria-label={field.label} value={mapping[field.key]} onChange={e => { setMapping(prev => prev ? { ...prev, [field.key]: Number(e.target.value) } : prev); setResult(null); }}><option value={-1}>— Not in file —</option>{headers.map((header, index) => <option key={`${header}-${index}`} value={index}>{header}</option>)}</select></label>)}</div><div className="csv-mapping-actions"><p>Amount is signed; use either that field <strong>or</strong> both credit and debit. Dates are interpreted as day/month/year when not ISO formatted.</p><button className="btn btn-primary" disabled={!isMappingValid(mapping)} onClick={() => applyPreview(raw, mapping)}>Preview transactions <Icon name="arrow-right" size={17}/></button></div></div>}
+      {!showMapping && <p className="csv-mapped-ok"><Icon name="check-circle-2" size={18}/> Columns matched. You can change the mapping at any time.</p>}
+    </section>}
+    {result && <section className="statement-result" aria-live="polite">
+      <div className="statement-result-title"><div><span className="ui-kicker">STEP 3 · LOCAL PREVIEW</span><h2>Transaction overview</h2><p>{result.rows.length.toLocaleString("en-IN")} valid transactions · {result.dateRange.from === result.dateRange.to ? formatDate(result.dateRange.from) : `${formatDate(result.dateRange.from)} – ${formatDate(result.dateRange.to)}`} · {result.sources} source{result.sources === 1 ? "" : "s"}</p></div><button className="btn btn-outline" onClick={reset}>Clear preview</button></div>
+      <div className="statement-metrics"><div className="statement-metric"><span>Possible earned income</span><strong>{money(result.income)}</strong><small>Excludes transfers, unknown credits and flagged matches</small></div><div className="statement-metric"><span>Recorded outflows</span><strong>{money(result.outflows)}</strong><small>All negative transactions; not all are necessarily expenses</small></div><div className="statement-metric"><span>Review needed</span><strong>{result.flagged + result.skipped}</strong><small>{result.flagged} flagged · {result.skipped} invalid/skipped</small></div></div>
+      {(result.warnings.length > 0 || result.skipped > 0) && <div className="csv-warning-panel"><div className="csv-warning-title"><Icon name="alert-triangle" size={19}/><strong>Check before relying on these numbers</strong></div><ul>{result.warnings.map(w => <li key={w}>{w}</li>)}</ul>{result.skippedReasons.length > 0 && <details><summary>See excluded rows ({result.skipped})</summary><ul>{result.skippedReasons.slice(0,30).map(item => <li key={item.line}>CSV row {item.line}: {item.reason}</li>)}</ul>{result.skipped > 30 && <p>Showing the first 30 excluded rows.</p>}</details>}</div>}
+      <div className="card statement-table-card"><div className="csv-section-heading"><div><h3>Transactions</h3><p>All lines are unverified. Tap a status to understand why it needs review.</p></div>{result.flagged + result.skipped > 0 && <button className="btn btn-outline" onClick={() => exportReview(result)}><Icon name="file-text" size={17}/> Export review list</button>}</div>
+        <div className="csv-toolbar"><label className="csv-search"><Icon name="search" size={17}/><input type="search" value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} placeholder="Search descriptions or references" aria-label="Search transactions"/></label><label>Type<select value={filter} onChange={e => setKind(e.target.value as KindFilter)}><option value="all">All transactions</option><option value="income">Possible earnings</option><option value="expense">Outflows</option><option value="transfer">Transfers</option><option value="review">Needs review</option></select></label><label>Source<select value={source} onChange={e => { setSource(e.target.value); setPage(0); }}><option value="all">All sources</option>{sources.map(s => <option key={s} value={s}>{s}</option>)}</select></label><label>Sort<select value={sort} onChange={e => { setSort(e.target.value as typeof sort); setPage(0); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label></div>
+        <div className="csv-table-meta"><span>Showing {visible.length === 0 ? 0 : safePage * 25 + 1}–{Math.min(visible.length, (safePage + 1) * 25)} of {visible.length} matching transactions</span>{(search || filter !== "all" || source !== "all") && <button type="button" onClick={resetFilters}>Reset filters</button>}</div>
+        <div className="statement-scroll"><table className="statement-table"><thead><tr><th>Date</th><th>Description</th><th>Source</th><th>Type</th><th>Amount</th><th>Status</th></tr></thead><tbody>{pageRows.map(row => <tr key={row.id}><td>{formatDate(row.date)}</td><td><span className="csv-description">{row.description}</span>{row.transactionId && <small className="csv-ref">Ref: {row.transactionId}</small>}</td><td>{row.source}</td><td><span className={`csv-kind ${row.kind}`}>{row.kind === "income" ? "Possible earning" : row.kind === "expense" ? "Outflow" : row.kind === "transfer" ? "Transfer" : "Unclassified"}</span></td><td className={row.amount > 0 ? "money-positive" : "money-negative"}>{row.amount > 0 ? "+" : "−"}{money(Math.abs(row.amount))}</td><td>{row.needsReview ? <details className="csv-row-issues"><summary className="data-tag review">{row.potentialDuplicate ? "Possible duplicate" : "Review"}</summary><ul>{row.issues.map(x => <li key={x}>{x}</li>)}</ul></details> : <span className="data-tag">Unverified</span>}</td></tr>)}</tbody></table>{visible.length === 0 && <p className="empty-note">No transactions match. Try another filter or search.</p>}</div>
+        {totalPages > 1 && <div className="csv-pagination"><button className="btn btn-outline" disabled={safePage === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>Previous</button><span>Page {safePage + 1} of {totalPages}</span><button className="btn btn-outline" disabled={safePage >= totalPages - 1} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}>Next</button></div>}
+      </div>
+      <div className="roadmap-note"><Icon name="info" size={19}/><div><strong>Preview complete — no EarnScore generated</strong><p>These are estimates based on a local CSV. Transfers and suspicious matches are not counted as earnings, but the underlying data has not been verified. Secure saving, actual transaction reconciliation, scoring, and lender sharing are future features.</p></div></div>
     </section>}
   </div>;
 }

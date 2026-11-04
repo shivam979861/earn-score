@@ -138,3 +138,21 @@ Frontend: `npm run test:csv` and `npm run test:demo` can be run with Node 22. Fo
 This is not a production IAM/KYC/financial-storage platform. Authentication lookup tables use trusted FastAPI authorization, while financial tables use PostgreSQL RLS as a secondary boundary. Backend SQL injection or compromised app credentials can undermine session-scoped RLS because custom PostgreSQL session settings are changeable. Real deployment requires a security review, hardening, stronger identity/consent verification, rate limiting, encryption and robust monitoring.
 
 See [DATABASE_DESIGN.md](DATABASE_DESIGN.md) for entity details, the full role access matrix, the migration sequence, scope semantics and verification limits.
+
+## Enhanced CSV upload & preview (worker)
+
+The `/worker/uploads` page now provides a **three-step, browser-only review workflow**:
+
+1. Choose or drag-and-drop a `.csv` (maximum 2 MB / 10,000 transactions) or load the fictional example.
+2. Review auto-detected headers or manually match date, description, signed amount **or** credit/debit, and optional category/source/reference columns.
+3. Inspect parsed summaries, flagged and skipped rows, source/type filters, search, pagination, and a locally downloaded review list.
+
+Recognized dates: `YYYY-MM-DD`, `YYYY/MM/DD`, `DD/MM/YYYY`, `DD-MM-YYYY` (day-first for non-ISO). Quoted CSV values, UTF-8 BOM, and credit/debit bank layouts are supported. Potential duplicate payouts, transfers, non-income credits, malformed numbers, and invalid dates are labeled for review. **Previewed data is never sent to the API or saved**; classification is heuristic and does not constitute bank verification or a credit decision. The earnings estimate excludes unknown credits and flagged potential duplicates; outflows include every negative amount and may include transfers.
+
+Run parser/preview checks from `frontend/`:
+
+```bash
+npm run test:csv
+```
+
+The next development phase is authenticated server ingestion and provenance checks; this feature intentionally does not create saved transactions.
