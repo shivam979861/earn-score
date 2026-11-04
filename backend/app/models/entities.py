@@ -83,11 +83,20 @@ class IncomeSource(Base):
 
 class Upload(Base):
     __tablename__ = "uploads"
-    __table_args__ = (UniqueConstraint("id", "user_id", name="uq_upload_owner"),)
+    __table_args__ = (UniqueConstraint("id", "user_id", name="uq_upload_owner"),
+                      UniqueConstraint("user_id", "file_hash", name="uq_upload_user_hash"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     file_hash: Mapped[str] = mapped_column(String(64))
     storage_key: Mapped[str] = mapped_column(Text)
+    filename: Mapped[str] = mapped_column(String(160), default="statement.csv")
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    valid_count: Mapped[int] = mapped_column(Integer, default=0)
+    invalid_count: Mapped[int] = mapped_column(Integer, default=0)
+    review_count: Mapped[int] = mapped_column(Integer, default=0)
+    duplicate_count: Mapped[int] = mapped_column(Integer, default=0)
+    column_mapping: Mapped[dict] = mapped_column(JSON_DOCUMENT, default=dict)
+    invalid_rows: Mapped[list] = mapped_column(JSON_DOCUMENT, default=list)
     status: Mapped[str] = mapped_column(String(30), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -98,6 +107,8 @@ class Transaction(Base):
         ForeignKeyConstraint(["income_source_id", "user_id"], ["income_sources.id", "income_sources.user_id"], name="fk_transaction_source_same_owner"),
         ForeignKeyConstraint(["upload_id", "user_id"], ["uploads.id", "uploads.user_id"], name="fk_transaction_upload_same_owner"),
         Index("ix_transactions_owner_date", "user_id", "occurred_at"),
+        Index("ix_transactions_owner_fingerprint", "user_id", "fingerprint"),
+        Index("ix_transactions_owner_reference", "user_id", "reference_key"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
@@ -107,6 +118,15 @@ class Transaction(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     classification: Mapped[str] = mapped_column(String(50), default="unclassified")
     evidence_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str] = mapped_column(String(250), default="")
+    source_name: Mapped[str] = mapped_column(String(100), default="Unspecified")
+    transaction_ref: Mapped[str] = mapped_column(String(100), default="")
+    source_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reference_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    review_reasons: Mapped[list] = mapped_column(JSON_DOCUMENT, default=list)
+    potential_duplicate: Mapped[bool] = mapped_column(Boolean, default=False)
+    verification_status: Mapped[str] = mapped_column(String(24), default="unverified")
 
 
 class Assessment(Base):

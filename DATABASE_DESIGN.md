@@ -146,3 +146,23 @@ The integration suite tests missing actor denial, worker separation, admin exclu
 - Real assessment calculation, factor normalization, model governance, processor worker, or risk training.
 - Generated lender report PDFs, lender-requested documents and lender UI for issuance of real loan decisions.
 - Enterprise-grade verification/identity, notification delivery, retention/deletion, and compliance controls.
+
+
+## Phase 2 extension — migration `0003_csv_imports`
+
+`uploads` now tracks filename, SHA-256 file hash (unique for each worker),
+original/valid/invalid/review/duplicate row counts, column mapping, and a bounded list
+of rejected-row reasons. `storage_key` remains `not-stored`; the original CSV bytes are
+not persisted. These metadata are visible only to the upload owner.
+
+`transactions` now includes normalized description/source/reference, source CSV line,
+row fingerprint, hashed source/reference key, potential-duplicate flag, explicit review
+reasons and an `unverified` verification state. All rows retain the owner and upload
+foreign keys; no automatic deduplication deletes records. PostgreSQL RLS policies from
+migration `0002` continue enforcing worker ownership on these existing tables, and
+runtime roles do not receive any new table permissions.
+
+**Important:** metadata such as reference keys and transaction fingerprints are
+matching hints, not proof of authenticity. Reconcile against authorized independent
+sources before using records in underwriting. Apply migrations using the DB owner;
+the runtime application database account must not own its tables.

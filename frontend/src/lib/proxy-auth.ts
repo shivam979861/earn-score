@@ -9,10 +9,16 @@ export async function authorizedBackend(path: string, init: RequestInit = {}) {
   const token = (await cookies()).get("earnscore_access")?.value;
   if (!token) return Response.json({ detail: "Not authenticated" }, { status: 401 });
   try {
+    const headers = new Headers(init.headers);
+    if (init.body instanceof FormData) {
+      // Fetch supplies its own multipart boundary; never override it.
+      headers.delete("Content-Type");
+    } else if (init.body && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+    headers.set("Authorization", `Bearer ${token}`);
     return await fetch(`${backend}/api/v1${path}`, {
-      ...init,
-      headers: { "Content-Type": "application/json", ...init.headers, Authorization: `Bearer ${token}` },
-      cache: "no-store",
+      ...init, headers, cache: "no-store",
     });
   } catch {
     return Response.json({ detail: "Backend unavailable" }, { status: 503 });

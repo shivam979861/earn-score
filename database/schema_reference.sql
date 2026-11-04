@@ -1,6 +1,7 @@
 -- EarnScore PostgreSQL reference DDL (not a replacement for Alembic migrations).
--- RLS policies and role grants live in backend/migrations/versions/0002_access_policies.py.
--- Run `alembic upgrade head` as earnscore_owner instead.
+-- Generated from SQLAlchemy models after migration 0003_csv_imports.
+-- Runtime role GRANTs and RLS policies live in 0002_access_policies.py.
+-- Use `alembic upgrade head` as earnscore_owner instead.
 
 
 CREATE TABLE users (
@@ -104,10 +105,19 @@ CREATE TABLE uploads (
 	user_id VARCHAR(36) NOT NULL, 
 	file_hash VARCHAR(64) NOT NULL, 
 	storage_key TEXT NOT NULL, 
+	filename VARCHAR(160) NOT NULL, 
+	row_count INTEGER NOT NULL, 
+	valid_count INTEGER NOT NULL, 
+	invalid_count INTEGER NOT NULL, 
+	review_count INTEGER NOT NULL, 
+	duplicate_count INTEGER NOT NULL, 
+	column_mapping JSONB NOT NULL, 
+	invalid_rows JSONB NOT NULL, 
 	status VARCHAR(30) NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL, 
 	PRIMARY KEY (id), 
 	CONSTRAINT uq_upload_owner UNIQUE (id, user_id), 
+	CONSTRAINT uq_upload_user_hash UNIQUE (user_id, file_hash), 
 	FOREIGN KEY(user_id) REFERENCES users (id)
 )
 
@@ -241,6 +251,15 @@ CREATE TABLE transactions (
 	occurred_at TIMESTAMP WITH TIME ZONE NOT NULL, 
 	classification VARCHAR(50) NOT NULL, 
 	evidence_ref TEXT, 
+	description VARCHAR(250) NOT NULL, 
+	source_name VARCHAR(100) NOT NULL, 
+	transaction_ref VARCHAR(100) NOT NULL, 
+	source_line INTEGER, 
+	fingerprint VARCHAR(64), 
+	reference_key VARCHAR(64), 
+	review_reasons JSONB NOT NULL, 
+	potential_duplicate BOOLEAN NOT NULL, 
+	verification_status VARCHAR(24) NOT NULL, 
 	PRIMARY KEY (id), 
 	CONSTRAINT fk_transaction_source_same_owner FOREIGN KEY(income_source_id, user_id) REFERENCES income_sources (id, user_id), 
 	CONSTRAINT fk_transaction_upload_same_owner FOREIGN KEY(upload_id, user_id) REFERENCES uploads (id, user_id), 
@@ -249,5 +268,7 @@ CREATE TABLE transactions (
 
 ;
 CREATE INDEX ix_transactions_owner_date ON transactions (user_id, occurred_at);
+CREATE INDEX ix_transactions_owner_fingerprint ON transactions (user_id, fingerprint);
+CREATE INDEX ix_transactions_owner_reference ON transactions (user_id, reference_key);
 CREATE INDEX ix_transactions_user_id ON transactions (user_id);
 

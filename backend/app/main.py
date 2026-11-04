@@ -5,6 +5,7 @@ from app.core.config import get_settings
 from app.core.database import Base, engine
 import app.models  # noqa: F401 - register SQLAlchemy models
 from app.api.routes import router
+from app.api.ingestion import router as ingestion_router
 
 
 @asynccontextmanager
@@ -21,8 +22,8 @@ async def lifespan(app: FastAPI):
         try:
             with engine.connect() as connection:
                 version = connection.execute(text("SELECT version_num FROM public.alembic_version")).scalar_one_or_none()
-            if version != "0002":
-                raise RuntimeError(f"Expected EarnScore PostgreSQL migration 0002, found {version!r}. Run: alembic upgrade head as owner")
+            if version != "0003":
+                raise RuntimeError(f"Expected EarnScore PostgreSQL migration 0003, found {version!r}. Run: alembic upgrade head as owner")
         except SQLAlchemyError as exc:
             raise RuntimeError("EarnScore PostgreSQL migrations missing or not readable. Run: alembic upgrade head as owner") from exc
     yield
@@ -33,3 +34,4 @@ origins = [entry.strip() for entry in get_settings().cors_origins.split(",") if 
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True,
                    allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
 app.include_router(router)
+app.include_router(ingestion_router)

@@ -13,7 +13,7 @@ This build keeps the existing PostgreSQL schema, backend authentication, row-lev
 - **Worker:** Home → Preview a statement → Try EarnScore → Privacy & consent → Account.
 - **Lender:** Home → Practice a review → Account.
 - **Admin:** Home → Users & roles → Account.
-- **Statement preview (`/worker/uploads`):** choose a CSV or try the included sample, inspect income/outflows and duplicate/transfer warnings, filter records, clear the preview. **Client-side only: no upload or database saving.**
+- **Statement preview (`/worker/uploads`):** choose a CSV or try the included sample, inspect income/outflows and duplicate/transfer warnings, filter records, clear the preview. **Browser-side preview plus explicit opt-in backend import of cleaned, unverified records.**
 - **Assessment sandbox:** collapsible assumptions and reset control.
 - **Login / registration:** simpler, mobile-friendly forms and fewer distracting elements.
 
@@ -21,7 +21,7 @@ Unfinished routes remain as honest planned-feature pages, rather than prominent 
 
 ### Try the UI
 
-Run PostgreSQL, the API and the frontend using the instructions below. Open `http://localhost:3000`. Without authentication, open `/demo` to explore the scoring simulation. With a worker account, open `/worker/uploads` and choose **Use sample data** to test the CSV preview. The files are not transmitted to the backend.
+Run PostgreSQL, the API and the frontend using the instructions below. Open `http://localhost:3000`. Without authentication, open `/demo` to explore the scoring simulation. With a worker account, open `/worker/uploads` and choose **Use sample data** to test the CSV preview. The files are kept in the browser until you explicitly choose **Save cleaned records**; that action transmits the CSV to the authenticated backend, which does not keep the original file.
 
 ## Project structure
 
@@ -156,3 +156,64 @@ npm run test:csv
 ```
 
 The next development phase is authenticated server ingestion and provenance checks; this feature intentionally does not create saved transactions.
+
+
+## Phase 2 — CSV ingestion, cleaning and deduplication (implemented)
+
+After updating from GitHub, apply the **new `0003` migration** using the database owner account:
+
+```bash
+cd backend
+DATABASE_URL='postgresql+psycopg://earnscore_owner:YOUR_OWNER_PASSWORD@localhost:5432/earnscore' alembic upgrade head
+# Start your backend with DATABASE_URL set to the earnscore_app credentials.
+uvicorn app.main:app --reload --port 8000
+```
+
+The new worker-only endpoints are:
+
+| Method | Endpoint | Action |
+| --- | --- | --- |
+| `POST` | `/api/v1/worker/uploads` | Authenticated multipart CSV import; form fields `file` and optional `mapping` JSON |
+| `GET` | `/api/v1/worker/uploads` | View the last 30 imports belonging to the logged-in worker |
+| `GET` | `/api/v1/worker/uploads/{id}/transactions?limit=100&offset=0` | Inspect cleaned rows from the worker's own import |
+
+The frontend uses the authenticated same-origin `/api/worker/uploads` proxy, which forwards
+multipart data without exposing the access token to browser JavaScript.
+
+**Supported files:** UTF-8 CSV up to 2 MB and 10,000 transaction rows; signed-amount
+or separate credit/debit formats; ISO and day/month/year dates; optional category,
+source and transaction reference columns. Column mapping from Step 2 is sent with the file.
+Malformed rows are skipped and their line numbers and reasons are reported.
+
+**Cleaning:** trims whitespace, normalizes date and currency values using decimal
+arithmetic, identifies possible earnings, transfers, other credits and outflows,
+flags future dates and unknown credits. This is classification of **self-reported**
+data, not independent verification. Invalid inputs are not used to calculate any score.
+
+**Deduplication:** groups repeated transaction references and repeated
+(date + amount + normalized description + source) patterns within a file and
+compares the same worker's older imports. It flags *all* suspected matches for review
+without deleting transactions or asserting fraud. Uploading the exact same file again
+is blocked with HTTP 409. Source records, user IDs, the original row number and review
+reasons are retained for auditability. Cross-file matching uses transaction fingerprints
+and hashed source/reference IDs; matching reference IDs may have different posting dates.
+
+**Privacy:** The raw uploaded CSV is processed in memory and discarded, not written to
+object storage. Normalized transaction descriptions, references, amounts, dates, status
+and review reasons **are stored in the database**. Each worker can read only their own
+imports through both API authorization and PostgreSQL RLS. Financial records are not
+shared with lenders automatically. Do not use real customer financial data in a
+hackathon prototype without appropriate security review, informed consent and policies.
+
+**Not yet implemented:** independent bank/platform verification, human review decisions,
+credit scoring based on imported transactions, production-grade retention controls,
+or real-world lender underwriting. Imported rows always have `verification_status=unverified`.
+
+To run regression tests:
+
+```bash
+cd backend && pytest -q
+cd ../frontend && npm run test:csv && npm run test:demo
+```
+
+Live PostgreSQL security integration tests require separate throwaway PostgreSQL test URLs.

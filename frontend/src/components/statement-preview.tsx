@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icon";
 import {
   inspectStatement, isMappingValid, MAX_CSV_BYTES, previewStatement,
@@ -20,6 +20,15 @@ const fields: { key: ColumnKey; label: string; hint: string }[] = [
 ];
 const formatDate = (s: string) => new Date(`${s}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 type KindFilter = "all" | "income" | "expense" | "transfer" | "review";
+type ImportReceipt = {
+  id: string; filename: string; created_at: string; status: string; row_count: number;
+  valid_count: number; invalid_count: number; review_count: number;
+  duplicate_count: number; verification_status: "unverified";
+  raw_file_stored: boolean;
+  summary?: { possible_income: string; total_outflows: string; note: string };
+  review_samples?: { line: number; description: string; reasons: string[] }[];
+  invalid_rows?: { line: number; reason: string }[];
+};
 
 function exportReview(result: StatementPreview) {
   const esc = (value: string | number) => {
@@ -50,19 +59,52 @@ export function StatementPreviewTool() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [saved, setSaved] = useState<ImportReceipt | null>(null);
+  const [previousImports, setPreviousImports] = useState<ImportReceipt[]>([]);
+  const [importsLoaded, setImportsLoaded] = useState(false);
   const [filter, setFilter] = useState<KindFilter>("all");
   const [source, setSource] = useState("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState<"newest" | "oldest">("newest");
+  useEffect(() => {
+    let active = true;
+    fetch("/api/worker/uploads", { cache: "no-store" }).then(r => r.ok ? r.json() : [])
+      .then((data: unknown) => {
+        if (active && Array.isArray(data)) { setPreviousImports(data as ImportReceipt[]); setImportsLoaded(true); }
+      }).catch(() => { /* Backend may be offline in preview-only mode. */ });
+    return () => { active = false; };
+  }, []);
+
+  async function saveImport() {
+    if (!raw || !mapping || !result || saving || saved) return;
+    setSaving(true); setSaveError("");
+    const form = new FormData();
+    form.set("file", new File([raw], filename, { type: "text/csv" }));
+    form.set("mapping", JSON.stringify(mapping));
+    try {
+      const response = await fetch("/api/worker/uploads", { method: "POST", body: form });
+      const body = await response.json();
+      if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Import was not saved. Please try again.");
+      const receipt = body as ImportReceipt;
+      setSaved(receipt);
+      setPreviousImports(existing => [receipt, ...existing.filter(item => item.id !== receipt.id)]);
+      setImportsLoaded(true);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Could not save processed records.");
+    } finally { setSaving(false); }
+  }
+
   const resetFilters = () => { setFilter("all"); setSource("all"); setSearch(""); setPage(0); setSort("newest"); };
 
   function applyPreview(csv: string, columns: ColumnMapping) {
     try {
       const parsed = previewStatement(csv, columns);
-      setResult(parsed); setShowMapping(false); setError(""); resetFilters();
+      setResult(parsed); setShowMapping(false); setError(""); setSaved(null); setSaveError(""); resetFilters();
     } catch (e) {
-      setResult(null); setError(e instanceof Error ? e.message : "Could not parse this statement."); setShowMapping(true);
+      setResult(null); setSaved(null); setSaveError(""); setError(e instanceof Error ? e.message : "Could not parse this statement."); setShowMapping(true);
     }
   }
   function openCSV(text: string, name: string) {
@@ -70,7 +112,7 @@ export function StatementPreviewTool() {
       const inspected = inspectStatement(text);
       setRaw(text); setFilename(name); setHeaders(inspected.headers);
       setRowCount(inspected.rowCount); setMapping(inspected.mapping);
-      setResult(null); setError(""); resetFilters();
+      setResult(null); setSaved(null); setSaveError(""); setError(""); resetFilters();
       if (isMappingValid(inspected.mapping)) applyPreview(text, inspected.mapping);
       else { setShowMapping(true); setError("We couldn't identify all required columns. Match them below to continue."); }
     } catch (e) {
@@ -99,7 +141,7 @@ export function StatementPreviewTool() {
   }
   function reset() {
     setRaw(""); setFilename(""); setHeaders([]); setRowCount(0); setMapping(null);
-    setShowMapping(false); setResult(null); setError(""); resetFilters();
+    setShowMapping(false); setResult(null); setSaved(null); setSaveError(""); setError(""); resetFilters();
     if (fileRef.current) fileRef.current.value = "";
   }
   const sources = useMemo(() => [...new Set(result?.rows.map(r => r.source) || [])].sort(), [result]);
@@ -118,8 +160,8 @@ export function StatementPreviewTool() {
 
   return <div className="statement-tool">
     <div className="new-page-heading"><span className="ui-kicker">WORKER WORKSPACE · INCOME RECORDS</span><h1>Upload and preview a statement</h1><p>Review transactions before using them for any future EarnScore assessment. You can try the whole experience with fictional sample data.</p></div>
-    <section className="privacy-strip" role="note"><Icon name="shield-check" size={20}/><div><strong>Private, browser-only preview</strong><span>Your CSV is read locally in this browser tab. It is not uploaded, stored in PostgreSQL, verified by a bank, or shared with lenders. Refreshing clears it.</span></div></section>
-    <div className="csv-workflow-steps"><span className="csv-step active"><b>1</b> Choose CSV</span><span className={`csv-step ${raw ? "active" : ""}`}><b>2</b> Match columns</span><span className={`csv-step ${result ? "active" : ""}`}><b>3</b> Review transactions</span></div>
+    <section className="privacy-strip" role="note"><Icon name="shield-check" size={20}/><div><strong>Preview first, save only when you choose</strong><span>Column matching and preview run locally in this browser. Only pressing “Save cleaned records” sends the CSV to your authenticated backend for processing and storage; bank verification and lender sharing are not enabled.</span></div></section>
+    <div className="csv-workflow-steps"><span className="csv-step active"><b>1</b> Choose CSV</span><span className={`csv-step ${raw ? "active" : ""}`}><b>2</b> Match columns</span><span className={`csv-step ${result ? "active" : ""}`}><b>3</b> Review transactions</span><span className={`csv-step ${saved ? "active" : ""}`}><b>4</b> Save if you want</span></div>
     <div className="statement-grid">
       <section className="card statement-upload-card">
         <div className={`csv-dropzone ${dragging ? "is-dragging" : ""}`} onDragEnter={e => { e.preventDefault(); setDragging(true); }} onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={e => { e.preventDefault(); if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }} onDrop={e => { e.preventDefault(); setDragging(false); void readFile(e.dataTransfer.files[0]); }}>
@@ -146,6 +188,26 @@ export function StatementPreviewTool() {
     </section>}
     {result && <section className="statement-result" aria-live="polite">
       <div className="statement-result-title"><div><span className="ui-kicker">STEP 3 · LOCAL PREVIEW</span><h2>Transaction overview</h2><p>{result.rows.length.toLocaleString("en-IN")} valid transactions · {result.dateRange.from === result.dateRange.to ? formatDate(result.dateRange.from) : `${formatDate(result.dateRange.from)} – ${formatDate(result.dateRange.to)}`} · {result.sources} source{result.sources === 1 ? "" : "s"}</p></div><button className="btn btn-outline" onClick={reset}>Clear preview</button></div>
+      <section className="card csv-save-card" aria-live="polite">
+        <div className="csv-save-copy"><span className="ui-kicker">STEP 4 · OPTIONAL SECURE IMPORT</span><h3>Save these cleaned transactions?</h3>
+          <p>Nothing is sent until you choose to save. EarnScore will validate the CSV again on the server and store normalized transaction records in your worker account. <strong>All rows remain unverified</strong>; the raw CSV file is not retained.</p>
+          <p className="csv-save-privacy"><Icon name="shield-check" size={16}/> Signed-in worker account only · No credit score generated · Duplicates are flagged, not deleted</p>
+        </div>
+        <div className="csv-save-actions">
+          <button type="button" className="btn btn-primary" disabled={saving || !!saved} onClick={() => void saveImport()}>
+            <Icon name={saved ? "check-circle-2" : "database"} size={18}/>{saved ? "Saved to your account" : saving ? "Saving records…" : "Save cleaned records"}
+          </button>
+          <span>Requires running FastAPI and PostgreSQL with migration 0003</span>
+        </div>
+        {saveError && <div className="form-error csv-save-error" role="alert"><Icon name="circle-alert" size={17}/>{saveError}</div>}
+        {saved && <div className="csv-save-success" role="status">
+          <strong><Icon name="check-circle-2" size={17}/> Import saved — not externally verified</strong>
+          <p>{saved.valid_count} accepted · {saved.invalid_count} invalid · {saved.review_count} needing review · {saved.duplicate_count} potential duplicates.</p>
+          <small>Import ID: {saved.id} · Original CSV not stored · No lender can access these records automatically.</small>
+          {(saved.review_samples?.length ?? 0) > 0 && <details className="csv-server-issues"><summary>See examples of server-side review flags</summary><ul>{saved.review_samples?.map(item => <li key={item.line}>CSV row {item.line}: {item.description} — {item.reasons.join("; ")}</li>)}</ul></details>}
+          {(saved.invalid_rows?.length ?? 0) > 0 && <details className="csv-server-issues"><summary>See invalid rows</summary><ul>{saved.invalid_rows?.slice(0,20).map(item => <li key={item.line}>CSV row {item.line}: {item.reason}</li>)}</ul></details>}
+        </div>}
+      </section>
       <div className="statement-metrics"><div className="statement-metric"><span>Possible earned income</span><strong>{money(result.income)}</strong><small>Excludes transfers, unknown credits and flagged matches</small></div><div className="statement-metric"><span>Recorded outflows</span><strong>{money(result.outflows)}</strong><small>All negative transactions; not all are necessarily expenses</small></div><div className="statement-metric"><span>Review needed</span><strong>{result.flagged + result.skipped}</strong><small>{result.flagged} flagged · {result.skipped} invalid/skipped</small></div></div>
       {(result.warnings.length > 0 || result.skipped > 0) && <div className="csv-warning-panel"><div className="csv-warning-title"><Icon name="alert-triangle" size={19}/><strong>Check before relying on these numbers</strong></div><ul>{result.warnings.map(w => <li key={w}>{w}</li>)}</ul>{result.skippedReasons.length > 0 && <details><summary>See excluded rows ({result.skipped})</summary><ul>{result.skippedReasons.slice(0,30).map(item => <li key={item.line}>CSV row {item.line}: {item.reason}</li>)}</ul>{result.skipped > 30 && <p>Showing the first 30 excluded rows.</p>}</details>}</div>}
       <div className="card statement-table-card"><div className="csv-section-heading"><div><h3>Transactions</h3><p>All lines are unverified. Tap a status to understand why it needs review.</p></div>{result.flagged + result.skipped > 0 && <button className="btn btn-outline" onClick={() => exportReview(result)}><Icon name="file-text" size={17}/> Export review list</button>}</div>
@@ -154,7 +216,11 @@ export function StatementPreviewTool() {
         <div className="statement-scroll"><table className="statement-table"><thead><tr><th>Date</th><th>Description</th><th>Source</th><th>Type</th><th>Amount</th><th>Status</th></tr></thead><tbody>{pageRows.map(row => <tr key={row.id}><td>{formatDate(row.date)}</td><td><span className="csv-description">{row.description}</span>{row.transactionId && <small className="csv-ref">Ref: {row.transactionId}</small>}</td><td>{row.source}</td><td><span className={`csv-kind ${row.kind}`}>{row.kind === "income" ? "Possible earning" : row.kind === "expense" ? "Outflow" : row.kind === "transfer" ? "Transfer" : "Unclassified"}</span></td><td className={row.amount > 0 ? "money-positive" : "money-negative"}>{row.amount > 0 ? "+" : "−"}{money(Math.abs(row.amount))}</td><td>{row.needsReview ? <details className="csv-row-issues"><summary className="data-tag review">{row.potentialDuplicate ? "Possible duplicate" : "Review"}</summary><ul>{row.issues.map(x => <li key={x}>{x}</li>)}</ul></details> : <span className="data-tag">Unverified</span>}</td></tr>)}</tbody></table>{visible.length === 0 && <p className="empty-note">No transactions match. Try another filter or search.</p>}</div>
         {totalPages > 1 && <div className="csv-pagination"><button className="btn btn-outline" disabled={safePage === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>Previous</button><span>Page {safePage + 1} of {totalPages}</span><button className="btn btn-outline" disabled={safePage >= totalPages - 1} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}>Next</button></div>}
       </div>
-      <div className="roadmap-note"><Icon name="info" size={19}/><div><strong>Preview complete — no EarnScore generated</strong><p>These are estimates based on a local CSV. Transfers and suspicious matches are not counted as earnings, but the underlying data has not been verified. Secure saving, actual transaction reconciliation, scoring, and lender sharing are future features.</p></div></div>
+      <div className="roadmap-note"><Icon name="info" size={19}/><div><strong>Import does not mean verified income</strong><p>The local preview is only an estimate. If you choose to save, the backend parses and stores cleaned, self-reported transactions. Independent bank verification, score generation and lender sharing are not implemented.</p></div></div>
+    </section>}
+    {importsLoaded && previousImports.length > 0 && <section className="card csv-history-card">
+      <div className="csv-section-heading"><div><span className="ui-kicker">YOUR ACCOUNT</span><h2>Recent saved imports</h2><p>Records are stored privately and remain unverified.</p></div></div>
+      <ul className="csv-history-list">{previousImports.slice(0,5).map(item => <li key={item.id}><div><strong>{item.filename}</strong><small>{item.valid_count} saved · {item.review_count} for review · {item.duplicate_count} potential duplicates</small></div><span className="data-tag">Unverified</span></li>)}</ul>
     </section>}
   </div>;
 }
