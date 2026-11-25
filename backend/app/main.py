@@ -7,6 +7,7 @@ import app.models  # noqa: F401 - register SQLAlchemy models
 from app.api.routes import router
 from app.api.ingestion import router as ingestion_router
 from app.api.reconciliation import router as reconciliation_router
+from app.api.financial_features import router as financial_features_router
 
 
 @asynccontextmanager
@@ -38,3 +39,5 @@ app.include_router(router)
 app.include_router(ingestion_router)
 
 app.include_router(reconciliation_router)
+
+app.include_router(financial_features_router)

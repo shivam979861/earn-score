@@ -9,6 +9,7 @@ export const nav: Record<Role, NavItem[]> = {
     { label: "Home", href: "/worker", icon: "layout-dashboard" },
     { label: "Preview a statement", href: "/worker/uploads", icon: "cloud-upload" },
     { label: "Saved transactions", href: "/worker/transactions", icon: "list-filter" },
+    { label: "Financial insights", href: "/worker/financial-insights", icon: "chart-no-axes-combined" },
     { label: "Try EarnScore", href: "/worker/assessment", icon: "gauge" },
     { label: "Privacy & consent", href: "/worker/consent", icon: "shield-check" },
     { label: "Account", href: "/worker/settings", icon: "lock-keyhole" },
