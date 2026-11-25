@@ -166,3 +166,8 @@ runtime roles do not receive any new table permissions.
 matching hints, not proof of authenticity. Reconcile against authorized independent
 sources before using records in underwriting. Apply migrations using the DB owner;
 the runtime application database account must not own its tables.
+
+
+## Migration 0004 — classification and reconciliation
+
+`uploads.source_kind` stores the worker's self-declared bank/platform/unknown type. `transactions.category_hint` retains untrusted category text. Existing ownership and RLS policies still apply; the worker-only reconciliation endpoint performs a read-only, versioned analysis. A matched pair is not external verification or a saved review decision.

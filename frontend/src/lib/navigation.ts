@@ -8,6 +8,7 @@ export const nav: Record<Role, NavItem[]> = {
   worker: [
     { label: "Home", href: "/worker", icon: "layout-dashboard" },
     { label: "Preview a statement", href: "/worker/uploads", icon: "cloud-upload" },
+    { label: "Saved transactions", href: "/worker/transactions", icon: "list-filter" },
     { label: "Try EarnScore", href: "/worker/assessment", icon: "gauge" },
     { label: "Privacy & consent", href: "/worker/consent", icon: "shield-check" },
     { label: "Account", href: "/worker/settings", icon: "lock-keyhole" },
@@ -28,7 +29,6 @@ export const roleLabels: Record<Role,string> = { worker: "Worker workspace", len
 
 export const modules: Record<string, { eyebrow: string; title: string; description: string; phase: string; steps: string[] }> = {
   "/worker/profile": { eyebrow: "Planned feature", title: "Worker profile", description: "Work history and income-source profiles are not available yet.", phase: "Not available yet", steps: ["Add occupation and work details", "Record income sources", "Check completeness"] },
-  "/worker/transactions": { eyebrow: "Planned feature", title: "Saved transactions", description: "Transaction storage and reconciliation are not connected yet. You can inspect a CSV on the preview page without uploading it to a server.", phase: "Not available yet", steps: ["Persist verified source records", "Deduplicate transactions", "Support user corrections"] },
   "/worker/reports": { eyebrow: "Planned feature", title: "My reports", description: "Real assessment reports require a working ingestion and scoring service.", phase: "Not available yet", steps: ["Generate a versioned report", "Add lender-specific sharing", "Support revocation"] },
   "/lender/applications": { eyebrow: "Planned feature", title: "Applications", description: "No live applications are available. Start with the fictional lender review to explore the proposed workflow.", phase: "Not available yet", steps: ["Accept applicant-authorized cases", "Display real evidence", "Require active grants"] },
   "/lender/reviews": { eyebrow: "Planned feature", title: "Review queue", description: "The live review queue is not connected. A fictional review flow is available for demonstration.", phase: "Not available yet", steps: ["Request evidence", "Track reviewers", "Record human decisions"] },

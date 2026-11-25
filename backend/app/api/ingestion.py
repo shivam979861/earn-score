@@ -9,9 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, set_actor_context
 from app.core.security import require_role
 from app.models.entities import AuditEvent, Transaction, Upload, User
+from app.services_reconciliation import SOURCE_KINDS
 from app.services_ingestion import MAX_BYTES, ImportValidationError, parse_statement
 
 router = APIRouter(prefix="/api/v1/worker", tags=["worker-ingestion"])
@@ -19,7 +20,7 @@ router = APIRouter(prefix="/api/v1/worker", tags=["worker-ingestion"])
 
 def serialize_upload(upload: Upload):
     return {
-        "id": upload.id, "filename": upload.filename, "created_at": upload.created_at,
+        "id": upload.id, "source_kind": upload.source_kind, "filename": upload.filename, "created_at": upload.created_at,
         "status": upload.status, "row_count": upload.row_count,
         "valid_count": upload.valid_count, "invalid_count": upload.invalid_count,
         "review_count": upload.review_count, "duplicate_count": upload.duplicate_count,
@@ -48,7 +49,10 @@ async def ingest_csv(
     db: Annotated[Session, Depends(get_db)],
     file: Annotated[UploadFile, File(description="CSV statement, max 2MB")],
     mapping: Annotated[str | None, Form()] = None,
+    source_kind: Annotated[str, Form()] = "unknown",
 ):
+    if source_kind not in SOURCE_KINDS:
+        raise HTTPException(422, "Choose bank, platform or unknown statement type.")
     filename = (file.filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
     if not filename.lower().endswith(".csv") or not filename or len(filename) > 160:
         raise HTTPException(status_code=400, detail="Select a CSV file with a valid filename.")
@@ -68,8 +72,8 @@ async def ingest_csv(
     # users' financial records; DB indices support the narrow fetch.
     first = min(r.date for r in parsed.rows)
     last = max(r.date for r in parsed.rows)
-    previous = db.scalars(select(Transaction).where(
-        Transaction.user_id == worker.id,
+    previous = db.scalars(select(Transaction).join(Upload, Transaction.upload_id == Upload.id).where(
+        Upload.source_kind == source_kind, Transaction.user_id == worker.id,
         Transaction.occurred_at >= datetime.combine(first, time.min, tzinfo=timezone.utc),
         Transaction.occurred_at <= datetime.combine(last, time.max, tzinfo=timezone.utc),
     )).all()
@@ -79,8 +83,8 @@ async def ingest_csv(
     previous_by_id = {p.id: p for p in previous}
     for start in range(0, len(all_refs), 400):
         refs = all_refs[start:start + 400]
-        for existing in db.scalars(select(Transaction).where(
-            Transaction.user_id == worker.id, Transaction.reference_key.in_(refs)
+        for existing in db.scalars(select(Transaction).join(Upload, Transaction.upload_id == Upload.id).where(
+            Upload.source_kind == source_kind, Transaction.user_id == worker.id, Transaction.reference_key.in_(refs)
         )).all():
             previous_by_id[existing.id] = existing
     previous = list(previous_by_id.values())
@@ -111,7 +115,7 @@ async def ingest_csv(
 
     item = Upload(
         user_id=worker.id, file_hash=file_hash, storage_key="not-stored",
-        filename=filename, row_count=parsed.count, valid_count=len(parsed.rows),
+        filename=filename, source_kind=source_kind, row_count=parsed.count, valid_count=len(parsed.rows),
         invalid_count=len(parsed.invalid),
         review_count=sum(bool(r.issues) for r in parsed.rows),
         duplicate_count=sum(r.duplicate for r in parsed.rows),
@@ -123,7 +127,7 @@ async def ingest_csv(
         db.add(Transaction(
             user_id=worker.id, upload_id=item.id, amount=row.amount,
             occurred_at=datetime.combine(row.date, time.min, tzinfo=timezone.utc),
-            classification=row.classification, description=row.description,
+            classification=row.classification, category_hint=row.category_hint, description=row.description,
             source_name=row.source, transaction_ref=row.reference,
             source_line=row.line, fingerprint=row.fingerprint,
             reference_key=row.reference_key, review_reasons=row.issues,
@@ -136,11 +140,14 @@ async def ingest_csv(
             older.review_count = sum(bool(t.review_reasons) for t in txns)
             older.duplicate_count = sum(bool(t.potential_duplicate) for t in txns)
     db.add(AuditEvent(actor_id=worker.id, action="financial.csv_imported", resource_id=item.id))
+    actor_id = worker.id
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="This CSV has already been imported or the import conflicted. Retry after refreshing.") from exc
+    # Commit clears PostgreSQL transaction-local RLS context.
+    set_actor_context(db, actor_id, "worker")
     return {
         **serialize_upload(item),
         "summary": {

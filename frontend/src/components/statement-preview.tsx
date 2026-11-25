@@ -59,6 +59,7 @@ export function StatementPreviewTool() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [sourceKind, setSourceKind] = useState("unknown");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saved, setSaved] = useState<ImportReceipt | null>(null);
@@ -84,6 +85,7 @@ export function StatementPreviewTool() {
     const form = new FormData();
     form.set("file", new File([raw], filename, { type: "text/csv" }));
     form.set("mapping", JSON.stringify(mapping));
+    form.set("source_kind", sourceKind);
     try {
       const response = await fetch("/api/worker/uploads", { method: "POST", body: form });
       const body = await response.json();
@@ -110,7 +112,7 @@ export function StatementPreviewTool() {
   function openCSV(text: string, name: string) {
     try {
       const inspected = inspectStatement(text);
-      setRaw(text); setFilename(name); setHeaders(inspected.headers);
+      setSourceKind("unknown"); setRaw(text); setFilename(name); setHeaders(inspected.headers);
       setRowCount(inspected.rowCount); setMapping(inspected.mapping);
       setResult(null); setSaved(null); setSaveError(""); setError(""); resetFilters();
       if (isMappingValid(inspected.mapping)) applyPreview(text, inspected.mapping);
@@ -194,15 +196,17 @@ export function StatementPreviewTool() {
           <p className="csv-save-privacy"><Icon name="shield-check" size={16}/> Signed-in worker account only · No credit score generated · Duplicates are flagged, not deleted</p>
         </div>
         <div className="csv-save-actions">
+          <label className="csv-field-map"><strong>What type of statement is this?</strong><select value={sourceKind} disabled={saving || !!saved} onChange={e => setSourceKind(e.target.value)}><option value="unknown">Other / not sure</option><option value="bank">Bank statement</option><option value="platform">Gig platform payout report</option></select><span>Used for matching, not for verification.</span></label>
           <button type="button" className="btn btn-primary" disabled={saving || !!saved} onClick={() => void saveImport()}>
             <Icon name={saved ? "check-circle-2" : "database"} size={18}/>{saved ? "Saved to your account" : saving ? "Saving records…" : "Save cleaned records"}
           </button>
-          <span>Requires running FastAPI and PostgreSQL with migration 0003</span>
+          <span>Requires running FastAPI and PostgreSQL with migration 0004</span>
         </div>
         {saveError && <div className="form-error csv-save-error" role="alert"><Icon name="circle-alert" size={17}/>{saveError}</div>}
         {saved && <div className="csv-save-success" role="status">
           <strong><Icon name="check-circle-2" size={17}/> Import saved — not externally verified</strong>
           <p>{saved.valid_count} accepted · {saved.invalid_count} invalid · {saved.review_count} needing review · {saved.duplicate_count} potential duplicates.</p>
+          <a className="btn btn-outline" href="/worker/transactions">Review saved transactions →</a>
           <small>Import ID: {saved.id} · Original CSV not stored · No lender can access these records automatically.</small>
           {(saved.review_samples?.length ?? 0) > 0 && <details className="csv-server-issues"><summary>See examples of server-side review flags</summary><ul>{saved.review_samples?.map(item => <li key={item.line}>CSV row {item.line}: {item.description} — {item.reasons.join("; ")}</li>)}</ul></details>}
           {(saved.invalid_rows?.length ?? 0) > 0 && <details className="csv-server-issues"><summary>See invalid rows</summary><ul>{saved.invalid_rows?.slice(0,20).map(item => <li key={item.line}>CSV row {item.line}: {item.reason}</li>)}</ul></details>}

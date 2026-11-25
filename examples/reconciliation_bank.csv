@@ -1,0 +1,5 @@
+date,description,amount,source,transaction_id
+2026-10-03,Swiggy payout,1500,Bank,B01
+2026-10-05,Zomato payout,2200,Bank,B02
+2026-10-06,Fuel,-350,Bank,B03
+2026-10-07,Personal transfer,1000,Bank,B04

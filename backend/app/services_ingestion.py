@@ -91,16 +91,13 @@ def parse_amount(raw: str) -> Decimal | None:
 
 
 def classify(description: str, category: str, amount: Decimal) -> str:
-    label = normalize_text(category + " " + description)
-    if re.search(r"transfer|own.?account|self.?transfer|internal transfer", label):
+    from app.services_reconciliation import categorize, EARNINGS
+    kind, _ = categorize(description, category, amount)
+    if kind == "transfer":
         return "transfer"
     if amount < 0:
         return "expense"
-    if re.search(r"refund|reversal|loan.?disburs|cashback|gift|reimburs|interest.?paid", label):
-        return "unknown"
-    if re.search(r"income|earning|payout|salary|revenue|freelanc|invoice paid|client payment|service fee", label):
-        return "income"
-    return "unknown"
+    return "income" if kind in EARNINGS else "unknown"
 
 
 def sha_value(*parts: str) -> str:
@@ -118,6 +115,7 @@ class CleanRow:
     classification: str
     fingerprint: str
     reference_key: str | None
+    category_hint: str = ""
     issues: list[str] = field(default_factory=list)
     duplicate: bool = False
 
@@ -193,6 +191,7 @@ def parse_statement(raw_bytes: bytes, mapping_json: str | None = None) -> Import
         content_key = sha_value(d.isoformat(), str(amount), normalize_text(desc), normalize_text(source))
         reference_key = sha_value(normalize_text(source), normalize_text(reference)) if reference else None
         row = CleanRow(line, d, desc[:250], amount, source, reference, classification, content_key, reference_key)
+        row.category_hint = get("category")[:100]
         if classification == "transfer":
             row.flag("Transfer is not earned income")
         elif classification == "unknown" and amount > 0:

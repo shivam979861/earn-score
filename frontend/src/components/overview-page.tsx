@@ -5,7 +5,7 @@ import type { Overview, Role, User } from "@/lib/types";
 const panels = {
   worker: {
     intro: "Start with your income story.",
-    description: "Explore how irregular earnings could be assessed. Your finances have not been uploaded or scored.",
+    description: "Explore how irregular earnings could be assessed. Upload statements and review your self-reported records before a future assessment.",
     primary: { title: "Preview an income statement", detail: "See what the system can read from a CSV, safely in your browser.", href: "/worker/uploads", icon: "cloud-upload", tag: "Available · local preview" },
     secondary: { title: "Explore a sample EarnScore", detail: "Adjust fictional earnings and view the score explanation.", href: "/worker/assessment", icon: "gauge", tag: "Interactive example" },
     tertiary: { title: "Manage privacy preferences", detail: "Control consent records. Sharing still requires a separate lender grant.", href: "/worker/consent", icon: "shield-check", tag: "Connected to backend" },
@@ -40,6 +40,6 @@ export function OverviewPage({ user, role, overview }: { user: User; role: Role;
         <span className="task-icon"><Icon name={item.icon} size={23}/></span><span className="task-tag">{item.tag}</span><h3>{item.title}</h3><p>{item.detail}</p><span className="task-action">{item.tag.startsWith("Coming") ? "View planned feature" : "Open tool"} <Icon name="arrow-right" size={17}/></span>
       </Link>)}
     </div>
-    <section className="roadmap-note"><Icon name="info" size={19}/><div><strong>What is live right now?</strong><p>Authentication, account management, and consent records use the backend. Income processing and lender decisions are not yet connected; sample assessments use fictional data only.</p></div></section>
+    <section className="roadmap-note"><Icon name="info" size={19}/><div><strong>What is live right now?</strong><p>Authentication, account management, consent, CSV imports and transaction reconciliation use the backend. Live scoring and lender decisions are not yet connected; sample assessments use fictional data only.</p></div></section>
   </div>;
 }

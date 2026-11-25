@@ -217,3 +217,10 @@ cd ../frontend && npm run test:csv && npm run test:demo
 ```
 
 Live PostgreSQL security integration tests require separate throwaway PostgreSQL test URLs.
+
+
+## Transaction classification and source reconciliation (migration 0004)
+
+Run `alembic upgrade head` as database owner before starting the backend. Open Worker → Preview a statement, upload `examples/reconciliation_platform.csv` as **Gig platform payout report**, then `examples/reconciliation_bank.csv` as **Bank statement**. Open Saved transactions. Two pairs (₹3,700 total, counted once) and one unmatched payout should appear. These are fictional records.
+
+The worker-only `GET /api/v1/worker/reconciliation` computes versioned rule-based categories, explanations and unique exact-amount recognized-payer matches (bank date 0–3 days after payout). Ambiguous, duplicate or flagged records are not paired; other source kinds and prior imports without source type require review. Same-type imports retain duplicate checks; different statement kinds are separate evidence. Matches are not persisted as verified claims; results are recomputed on request, capped at 20,000 rows. No combined income total, live bank connection, scoring or lender approval is produced. Supported payer names are listed in `services_reconciliation.py`. Older uploads remain unknown, and cannot be retagged in this version.

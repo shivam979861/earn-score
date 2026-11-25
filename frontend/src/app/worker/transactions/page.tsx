@@ -1,2 +1,2 @@
-import { ModulePage } from "@/components/module-page";
-export default function Page() { return <ModulePage route="/worker/transactions" home="/worker" />; }
+import { ReconciliationPanel } from "@/components/reconciliation-panel";
+export default function Page() { return <ReconciliationPanel />; }
