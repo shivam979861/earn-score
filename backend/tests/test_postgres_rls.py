@@ -12,6 +12,7 @@ import uuid
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
 
 OWNER_URL = os.getenv("TEST_POSTGRES_OWNER_URL")
 APP_URL = os.getenv("TEST_POSTGRES_APP_URL")
@@ -32,10 +33,15 @@ def _num(conn, table: str):
 
 
 def test_worker_isolation_lender_scope_and_revocation():
+    from app.api.routes import create_consent, issue_access_grant, revoke_access_grant, revoke_consent
+    from app.core.database import set_actor_context
+    from app.models.entities import User
+    from app.schemas.access import ConsentCreate, GrantCreate
+
     owner_engine = create_engine(OWNER_URL)
     app_engine = create_engine(APP_URL)
     user1, user2, lender1, lender2, admin = (_id() for _ in range(5))
-    assessment, report, source, txn, consent, grant = (_id() for _ in range(6))
+    assessment, report, source, txn = (_id() for _ in range(4))
     try:
         with owner_engine.begin() as conn:
             for uid, role in [(user1, "worker"), (user2, "worker"),
@@ -81,21 +87,19 @@ def test_worker_isolation_lender_scope_and_revocation():
                     VALUES (:id,:uid,'x','pending',now())
                 """), {"id": _id(), "uid": user1})
 
-        # Worker may only issue a scoped grant backed by valid explicit consent.
-        with app_engine.begin() as conn:
-            _as(conn, user1, "worker")
-            conn.execute(text("""
-                INSERT INTO consents (id,user_id,purposes,scopes,created_at,expires_at)
-                VALUES (:id,:uid,'{"lender_review":true}'::jsonb,
-                        '{"assessment":true,"report":true}'::jsonb,
-                        now(),now()+interval '30 days')
-            """), {"id": consent, "uid": user1})
-            conn.execute(text("""
-                INSERT INTO lender_access
-                (id,lender_id,assessment_id,consent_id,scopes,created_at,expires_at)
-                VALUES (:gid,:lid,:aid,:cid,'{"assessment":true,"report":true}'::jsonb,
-                        now(),now()+interval '2 days')
-            """), {"gid": grant, "lid": lender1, "aid": assessment, "cid": consent})
+        with Session(app_engine) as db:
+            set_actor_context(db, user1, "worker")
+            worker = db.get(User, user1)
+            consent = create_consent(ConsentCreate(scopes=["assessment", "report"]), worker, db)
+            assert consent["active"]
+
+            set_actor_context(db, user1, "worker")
+            grant_input = GrantCreate(
+                assessment_id=assessment, consent_id=consent["id"], lender_id=lender1,
+                scopes=["assessment", "report"],
+            )
+            grant = issue_access_grant(grant_input, worker, db)
+            assert grant["scopes"] == {"assessment": True, "report": True}
         with app_engine.begin() as conn:
             _as(conn, lender1, "lender")
             assert conn.execute(text("SELECT count(*) FROM assessments WHERE id=:id"), {"id": assessment}).scalar_one() == 1
@@ -105,10 +109,21 @@ def test_worker_isolation_lender_scope_and_revocation():
             _as(conn, lender2, "lender")
             assert conn.execute(text("SELECT count(*) FROM reports WHERE id=:id"), {"id": report}).scalar_one() == 0
 
-        # Parent consent revocation cuts off every related report immediately.
+        with Session(app_engine) as db:
+            set_actor_context(db, user1, "worker")
+            worker = db.get(User, user1)
+            assert revoke_access_grant(grant["id"], worker, db)["revoked_at"] is not None
         with app_engine.begin() as conn:
-            _as(conn, user1, "worker")
-            conn.execute(text("UPDATE consents SET revoked_at=now() WHERE id=:id"), {"id": consent})
+            _as(conn, lender1, "lender")
+            assert conn.execute(text("SELECT count(*) FROM reports WHERE id=:id"), {"id": report}).scalar_one() == 0
+
+        # Parent consent revocation cuts off an otherwise active grant.
+        with Session(app_engine) as db:
+            set_actor_context(db, user1, "worker")
+            worker = db.get(User, user1)
+            issue_access_grant(grant_input, worker, db)
+            set_actor_context(db, user1, "worker")
+            assert not revoke_consent(consent["id"], worker, db)["active"]
         with app_engine.begin() as conn:
             _as(conn, lender1, "lender")
             assert conn.execute(text("SELECT count(*) FROM reports WHERE id=:id"), {"id": report}).scalar_one() == 0
@@ -117,8 +132,9 @@ def test_worker_isolation_lender_scope_and_revocation():
         # Schema owner bypasses RLS only in this isolated fixture cleanup.
         with owner_engine.begin() as conn:
             for table, column, values in [
-                ("lender_access", "id", [grant]),
-                ("consents", "id", [consent]),
+                ("lender_access", "assessment_id", [assessment]),
+                ("consents", "user_id", [user1]),
+                ("audit_events", "actor_id", [user1]),
                 ("reports", "id", [report]),
                 ("assessments", "id", [assessment]),
                 ("transactions", "id", [txn]),

@@ -12,10 +12,15 @@ export function PortalShell({ role, user, children }: { role: Role; user: User; 
   const pathname = usePathname();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [previousPathname, setPreviousPathname] = useState(pathname);
   const [busy, setBusy] = useState(false);
   const current = nav[role].find(item => item.href === pathname || (item.href !== `/${role}` && pathname.startsWith(item.href + "/")));
 
-  useEffect(() => { setMobileOpen(false); }, [pathname]);
+  if (pathname !== previousPathname) {
+    setPreviousPathname(pathname);
+    setMobileOpen(false);
+  }
+
   useEffect(() => {
     if (!mobileOpen) return;
     const onEscape = (e: KeyboardEvent) => { if (e.key === "Escape") setMobileOpen(false); };

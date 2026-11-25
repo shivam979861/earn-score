@@ -132,7 +132,7 @@ export function StatementPreviewTool() {
     catch { setError("We couldn't open the selected CSV file."); setResult(null); }
     finally { setLoading(false); }
   }
-  async function useSample() {
+  async function loadSample() {
     setLoading(true); setError("");
     try {
       const response = await fetch("/examples/demo_transactions.csv", { cache: "no-store" });
@@ -177,7 +177,7 @@ export function StatementPreviewTool() {
         {filename && <div className="csv-selected-file"><Icon name="file-text" size={19}/><div><strong>{filename}</strong><span>{rowCount.toLocaleString("en-IN")} transaction rows found</span></div><button type="button" className="csv-text-button" onClick={reset} aria-label="Clear selected statement">Clear</button></div>}
       </section>
       <section className="card statement-steps"><span className="ui-kicker">NEW HERE?</span><h2>Try the sample first</h2><p className="csv-aside-copy">See how earnings, transfers, possible duplicates, and expenses appear before choosing a personal file.</p>
-        <button className="btn btn-outline csv-demo-button" type="button" disabled={loading} onClick={() => void useSample()}><Icon name="file-text" size={18}/> Load sample transactions</button>
+        <button className="btn btn-outline csv-demo-button" type="button" disabled={loading} onClick={() => void loadSample()}><Icon name="file-text" size={18}/> Load sample transactions</button>
         <a className="sample-download" href="/examples/demo_transactions.csv" download>Download example CSV <Icon name="arrow-down-right" size={14}/></a>
         <div className="csv-supported"><strong>Supported column layouts</strong><span><Icon name="check" size={15}/> Date + description + signed amount</span><span><Icon name="check" size={15}/> Date + narration + credit + debit</span><span><Icon name="check" size={15}/> Optional source, category, and reference ID</span></div>
       </section>

@@ -27,17 +27,25 @@ export function WorkerConsentManager() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const r = await fetch("/api/worker/consents", { cache: "no-store" });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || "Unable to load consent records");
-      setConsents(data as Consent[]);
-    } catch (err) { setError(err instanceof Error ? err.message : "Unable to load records"); }
-    finally { setLoading(false); }
+  const load = useCallback((signal?: AbortSignal) => {
+    return fetch("/api/worker/consents", { cache: "no-store", signal })
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Unable to load consent records");
+        if (!signal?.aborted) setConsents(data as Consent[]);
+      })
+      .catch((err: unknown) => {
+        if (!signal?.aborted) setError(err instanceof Error ? err.message : "Unable to load records");
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLoading(false);
+      });
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   async function create() {
     if (scopes.length === 0) return;
@@ -50,6 +58,7 @@ export function WorkerConsentManager() {
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail || "Could not record consent");
       setNotice("Consent preferences saved. No lender receives access until you explicitly issue a separate assessment grant.");
+      setLoading(true);
       await load();
     } catch (err) { setError(err instanceof Error ? err.message : "Unable to create consent"); }
     finally { setBusy(false); }
@@ -63,6 +72,7 @@ export function WorkerConsentManager() {
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail || "Unable to revoke consent");
       setNotice("Consent revoked. Previously authorized lender access linked to it is no longer valid.");
+      setLoading(true);
       await load();
     } catch (err) { setError(err instanceof Error ? err.message : "Unable to revoke consent"); }
     finally { setBusy(false); }

@@ -202,8 +202,10 @@ def create_consent(data: ConsentCreate,
     db.add(item)
     db.flush()
     audit(db, worker.id, "consent.created", item.id)
+    # Capture the response while the transaction still has the worker's RLS context.
+    response = _consent_response(item)
     db.commit()
-    return _consent_response(item)
+    return response
 
 
 @router.get("/worker/consents", tags=["worker"])
@@ -224,7 +226,9 @@ def revoke_consent(consent_id: str,
     if item.revoked_at is None:
         item.revoked_at = utcnow()
         audit(db, worker.id, "consent.revoked", consent_id)
+        response = _consent_response(item)
         db.commit()
+        return response
     return _consent_response(item)
 
 
@@ -253,10 +257,11 @@ def issue_access_grant(data: GrantCreate,
     db.add(grant)
     db.flush()
     audit(db, worker.id, "lender_access.granted", grant.id)
+    response = {"id": grant.id, "lender_id": lender.id,
+                "assessment_id": assessment.id, "scopes": grant.scopes,
+                "expires_at": grant.expires_at, "revoked_at": None}
     db.commit()
-    return {"id": grant.id, "lender_id": lender.id,
-            "assessment_id": assessment.id, "scopes": grant.scopes,
-            "expires_at": grant.expires_at, "revoked_at": None}
+    return response
 
 
 @router.post("/worker/access-grants/{grant_id}/revoke", tags=["worker"])
@@ -267,11 +272,13 @@ def revoke_access_grant(grant_id: str,
     assessment = db.get(Assessment, grant.assessment_id) if grant else None
     if grant is None or assessment is None or assessment.user_id != worker.id:
         raise HTTPException(status_code=404, detail="Access grant not found")
-    if grant.revoked_at is None:
-        grant.revoked_at = utcnow()
+    revoked_at = grant.revoked_at
+    if revoked_at is None:
+        revoked_at = utcnow()
+        grant.revoked_at = revoked_at
         audit(db, worker.id, "lender_access.revoked", grant_id)
         db.commit()
-    return {"ok": True, "id": grant_id, "revoked_at": grant.revoked_at}
+    return {"ok": True, "id": grant_id, "revoked_at": revoked_at}
 
 
 @router.get("/worker/assessments/{assessment_id}", tags=["worker"])
